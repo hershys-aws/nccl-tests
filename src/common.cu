@@ -117,6 +117,7 @@ static int minCudaArch = 1<<30;
 
 enum output_file_type_t {
   JSON_FILE_OUTPUT,
+  CSV_FILE_OUTPUT,
   UNSPECIFIED_FILE_OUTPUT
 };
 
@@ -157,6 +158,9 @@ static output_file_type_t classifyOutputFile(const char *filename) {
   if (extension != nullptr && strcasecmp(extension, "json") == 0) {
     return JSON_FILE_OUTPUT;
   }
+  if (extension != nullptr && strcasecmp(extension, "csv") == 0) {
+    return CSV_FILE_OUTPUT;
+  }
 
   return UNSPECIFIED_FILE_OUTPUT;
 }
@@ -166,6 +170,9 @@ static void outputFileInit(output_file_type_t output_file_type,
   switch (output_file_type) {
   case JSON_FILE_OUTPUT:
     jsonOutputInit(output_file, argc, argv, envp);
+    break;
+  case CSV_FILE_OUTPUT:
+    csvOutputInit(output_file, argc, argv, envp);
     break;
   case UNSPECIFIED_FILE_OUTPUT:
   default:
@@ -177,6 +184,9 @@ static void outputFileFinalize(output_file_type_t output_file_type) {
   switch (output_file_type) {
   case JSON_FILE_OUTPUT:
     jsonOutputFinalize();
+    break;
+  case CSV_FILE_OUTPUT:
+    csvOutputFinalize();
     break;
   case UNSPECIFIED_FILE_OUTPUT:
   default:
@@ -778,6 +788,7 @@ testResult_t threadInit(struct threadArgs* args) {
   is_main_thread = (is_main_proc && args->thread == 0) ? 1 : 0;
 
   jsonIdentifyWriter(is_main_thread);
+  csvIdentifyWriter(is_main_thread);
 
   // Capture GPU memory before initializing the NCCL communicators
   int64_t* initFreeGpuMem = (int64_t*)calloc(args->nGpus*3, sizeof(int64_t));
@@ -1147,7 +1158,7 @@ int main(int argc, char* argv[], char **envp) {
             "[-G,--cudagraph <num graph launches>] \n\t"
             "[-C,--report_cputime <0/1>] \n\t"
             "[-S,--report_timestamps <0/1> report timestamps (default 0)] \n\t"
-            "[-J,--output_file <file> write output to filepath, if accessible. Infer type from suffix (only json supported presently.)] \n\t"
+            "[-J,--output_file <file> write output to filepath, if accessible. Infer type from suffix (json or csv supported).] \n\t"
             "[-a,--average <0/1/2/3> report average iteration time <0=RANK0/1=AVG/2=MIN/3=MAX>] \n\t"
             "[-R,--local_register <0/1/2> enable local (1) or symmetric (2) buffer registration on send/recv buffers (default: disable (0))] \n\t"
             "[-x,--cta_policy <0/1/2> set CTA policy (NCCL_CTA_POLICY_DEFAULT (0), NCCL_CTA_POLICY_EFFICIENCY (1), NCCL_CTA_POLICY_ZERO (2)) (default: do not set)] \n\t"
@@ -1262,6 +1273,7 @@ testResult_t run() {
   is_main_thread = is_main_proc = (proc == 0) ? 1 : 0;
 
   jsonIdentifyWriter(is_main_thread);
+  csvIdentifyWriter(is_main_thread);
 
   size_t maxMem = ~0;
   testResult_t report_result = writeDeviceReport(&maxMem, localRank, proc, totalProcs, color, hostname, program_invocation_short_name);

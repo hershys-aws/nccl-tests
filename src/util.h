@@ -30,6 +30,11 @@ void jsonIdentifyWriter(bool is_writer);
 // Write end time and close top-level object. Reset json state and close output file.
 void jsonOutputFinalize();
 
+// CSV output functions (mirror JSON)
+void csvOutputInit(const char *path, int argc, char **argv, char **envp);
+void csvIdentifyWriter(bool is_writer);
+void csvOutputFinalize();
+
 void writeBenchmarkLinePreamble(size_t nBytes, size_t nElem, const char typeName[], const char opName[], int root);
 void writeBenchmarkLineTerminator(int actualIters, const char *name);
 void writeBenchMarkLineNullBody();

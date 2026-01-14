@@ -41,6 +41,21 @@ extern int cudaGraphLaunches;
 static FILE *json_report_fp;
 static thread_local bool write_json;
 
+// CSV output state
+static FILE *csv_report_fp = nullptr;
+static thread_local bool write_csv = false;
+
+// CSV row accumulator (stores data between Preamble -> Body -> Body -> Terminator calls)
+static thread_local size_t csv_nBytes = 0;
+static thread_local size_t csv_nElem = 0;
+static thread_local char csv_typeName[16] = "";
+static thread_local char csv_opName[16] = "";
+static thread_local int csv_root = 0;
+static thread_local double csv_oop_time = 0, csv_oop_algBw = 0, csv_oop_busBw = 0;
+static thread_local double csv_ip_time = 0, csv_ip_algBw = 0, csv_ip_busBw = 0;
+static thread_local bool csv_oop_valid = false;
+static thread_local bool csv_ip_valid = false;
+
 #define JSON_FILE_VERSION 1
 
 #define TIME_STRING_FORMAT "%Y-%m-%d %H:%M:%S"
@@ -379,6 +394,59 @@ void jsonOutputFinalize() {
   }
 }
 
+// CSV output functions
+void csvOutputInit(const char *in_path, int argc, char **argv, char **envp) {
+  if(in_path == nullptr) {
+    return;
+  }
+
+  #ifdef MPI_SUPPORT
+  int proc;
+  MPI_Comm_rank(MPI_COMM_WORLD, &proc);
+  if(proc != 0) {
+    return;
+  }
+  #endif
+
+  char *try_path = strdup(in_path);
+  int try_count = 0;
+  csv_report_fp = fopen(try_path, "wx");
+  while(csv_report_fp == NULL) {
+    if(errno != EEXIST) {
+      printf("# skipping csv output; %s not accessible\n", try_path);
+      free(try_path);
+      return;
+    }
+    free(try_path);
+    if(asprintf(&try_path, "%s.%d", in_path, try_count++) == -1) {
+      printf("# skipping csv output; failed to probe destination\n");
+      return;
+    }
+    csv_report_fp = fopen(try_path, "wx");
+  }
+
+  printf("# Writing CSV output to %s\n", try_path);
+  free(try_path);
+
+  write_csv = true;
+
+  // Write CSV header row
+  fprintf(csv_report_fp, "size,count,type,redop,root,oop_time,oop_algbw,oop_busbw,ip_time,ip_algbw,ip_busbw,iterations\n");
+  fflush(csv_report_fp);
+}
+
+void csvIdentifyWriter(bool is_writer) {
+  write_csv &= is_writer;
+}
+
+void csvOutputFinalize() {
+  if(write_csv && csv_report_fp) {
+    fclose(csv_report_fp);
+    csv_report_fp = nullptr;
+    write_csv = false;
+  }
+}
+
 struct rankInfo_t {
   int rank;
   int group;
@@ -433,6 +501,18 @@ void writeBenchmarkLinePreamble(size_t nBytes, size_t nElem, const char typeName
     jsonKey("redop"); jsonStr(opName);
     jsonKey("root");  jsonStr(rootName);
   }
+
+  if(write_csv) {
+    csv_nBytes = nBytes;
+    csv_nElem = nElem;
+    strncpy(csv_typeName, typeName, sizeof(csv_typeName)-1);
+    csv_typeName[sizeof(csv_typeName)-1] = '\0';
+    strncpy(csv_opName, opName, sizeof(csv_opName)-1);
+    csv_opName[sizeof(csv_opName)-1] = '\0';
+    csv_root = root;
+    csv_oop_valid = false;
+    csv_ip_valid = false;
+  }
 }
 
 // Finish a result record we were writing to stdout/json
@@ -443,6 +523,28 @@ void writeBenchmarkLineTerminator(int actualIters, const char *name) {
     jsonKey("experiment_name");   jsonStr(name);
     jsonFinishObject();
   }
+
+  if(write_csv && csv_report_fp) {
+    fprintf(csv_report_fp, "%zu,%zu,%s,%s,%d,",
+            csv_nBytes, csv_nElem, csv_typeName, csv_opName, csv_root);
+
+    // Out-of-place columns
+    if(csv_oop_valid) {
+      fprintf(csv_report_fp, "%.2f,%.2f,%.2f,", csv_oop_time, csv_oop_algBw, csv_oop_busBw);
+    } else {
+      fprintf(csv_report_fp, ",,,");
+    }
+
+    // In-place columns
+    if(csv_ip_valid) {
+      fprintf(csv_report_fp, "%.2f,%.2f,%.2f,", csv_ip_time, csv_ip_algBw, csv_ip_busBw);
+    } else {
+      fprintf(csv_report_fp, ",,,");
+    }
+
+    fprintf(csv_report_fp, "%d\n", actualIters);
+    fflush(csv_report_fp);
+  }
 }
 
 // Handle a cases where we don't write out of place results
@@ -450,6 +552,9 @@ void writeBenchMarkLineNullBody() {
   PRINT("                                ");  // only do in-place for trace replay
   if(write_json) {
     jsonKey("out_of_place"); jsonNull();
+  }
+  if(write_csv) {
+    csv_oop_valid = false;  // Mark out-of-place as invalid/null
   }
 }
 
@@ -498,6 +603,20 @@ void writeBenchmarkLineBody(double timeUsec, double algBw, double busBw, bool re
     jsonKey("bus_bw");                             jsonDouble(busBw);
     jsonKey("nwrong");                             (reportErrors ? jsonDouble((double)wrongElts) : jsonNull());
     jsonFinishObject();
+  }
+
+  if(write_csv) {
+    if(out_of_place) {
+      csv_oop_time = timeUsec;
+      csv_oop_algBw = algBw;
+      csv_oop_busBw = busBw;
+      csv_oop_valid = true;
+    } else {
+      csv_ip_time = timeUsec;
+      csv_ip_algBw = algBw;
+      csv_ip_busBw = busBw;
+      csv_ip_valid = true;
+    }
   }
 }
 
